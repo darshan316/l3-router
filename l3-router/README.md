@@ -1,4 +1,4 @@
-# l3-router — an IPv4 router with longest-prefix match, ARP and ICMP
+# l3-router an IPv4 router with longest-prefix match, ARP and ICMP
 
 A Layer 3 router in C. It does what a router actually does on the wire:
 verifies the IP header checksum, decrements TTL, looks up the destination by
