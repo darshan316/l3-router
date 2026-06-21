@@ -1,80 +1,78 @@
-# l3-router an IPv4 router with longest-prefix match, ARP and ICMP
+# L3 IPv4 Router
 
-A Layer 3 router in C. It does what a router actually does on the wire:
-verifies the IP header checksum, decrements TTL, looks up the destination by
-longest-prefix match, resolves the next hop with ARP, rewrites the
-Ethernet header and forwards and it speaks enough ICMP to answer pings and
-return Time Exceeded / Destination Unreachable. It runs as a no-privilege
-simulator (a router wired to two model hosts) and as a real router over Linux
-TAP interfaces.
+A Layer 3 IPv4 router written in C. It performs the work a router does on the
+wire: looking up the best route to a destination, resolving the next hop with
+ARP, rewriting the packet, and forwarding it. It also answers pings and reports
+errors using ICMP.
 
-## Why this exists
-Routing is the Layer 3 half of "Layer 2/3." The interesting parts of a router
-aren't the packet format, they're (1) the LPM lookup that hardware does in a
-TCAM here a bitwise trie and (2) the ARP + forwarding glue that turns a
-routing decision into bytes on the next link. Both are implemented and tested.
+## Overview
 
-## Forwarding path (one IP packet)
+A router connects different networks and forwards IP packets between them. This
+project implements the forwarding path from scratch, including the route lookup,
+address resolution, and error handling that a real router performs. It runs as a
+simulator, with a router wired to two test hosts, and as a real router on Linux
+TUN/TAP interfaces.
 
- frame ─▶ L2 filter (our MAC / bcast?)
-        ─▶ ARP?  → reply for our IP, learn sender, release queued packets
-        ─▶ IPv4: verify header checksum
-             ├─ dst is us?  → ICMP echo  → echo reply
-             └─ forward:
-                  TTL<=1            → ICMP Time Exceeded, drop
-                  LPM lookup miss   → ICMP Dest Unreachable, drop
-                  TTL--, recompute checksum
-                  next hop = route gateway (or dst if connected)
-                  ARP known?  yes → rewrite L2, send
-                              no  → queue packet, broadcast ARP request
+## What it implements
 
+- Longest-prefix-match route lookup using a trie
+- Connected, static, and default routes
+- ARP to resolve the next hop, with a queue for packets waiting on a reply
+- ICMP echo reply (ping), time exceeded, and destination unreachable
+- TTL decrement and IP header checksum verification and update
 
-## Layout
-| file | what it is |
-|------|------------|
-| ip.[ch]     | IPv4 parse/format, netmasks, RFC 1071 checksum, packed headers |
-| iptrie.[ch] | longest-prefix-match routing table (bitwise trie) |
-| arp.[ch]    | ARP cache + request/reply build/parse (RFC 826) |
-| eth.[ch]    | Ethernet II framing and MAC helpers |
-| router.[ch] | interfaces, forwarding engine, ICMP, ARP-pending queue |
-| sim.[ch]    | event-driven wire + model hosts for the ping demo |
-| tap.[ch]    | Linux TAP backend for real interfaces |
-| tests/      | unit tests for checksum, LPM and ARP |
+## How it works
 
-## Build & test
-sh
-make          # builds ./router
-make test     # runs unit tests (checksum / LPM / ARP 15 checks)
+When a frame arrives, the router checks whether it is an ARP message or an IP
+packet. ARP requests for the router's own addresses are answered, and the sender
+is recorded. For an IP packet, the router verifies the header checksum. If the
+packet is addressed to the router and is a ping, the router replies. Otherwise it
+forwards the packet: it decrements the TTL, recomputes the checksum, looks up the
+destination using longest-prefix match, finds the next hop, resolves that next
+hop's hardware address with ARP, rewrites the Ethernet header, and sends the
+packet out the correct interface. If the TTL has expired or no route exists, the
+router returns the matching ICMP error message.
 
+## Project structure
 
-## Try it (no root needed)
-sh
-./router route   # routing table + LPM lookups (/25 beats /24, default route)
-./router ping    # hostA pings hostB across the router,ARP runs on both legs
-./router ttl     # a TTL=1 packet comes back as ICMP Time Exceeded (traceroute)
+- ip: IPv4 address helpers, the Internet checksum, and packet headers
+- iptrie: the routing table built as a longest-prefix-match trie
+- arp: the ARP cache and message handling
+- eth: Ethernet framing and address helpers
+- router: the interfaces, the forwarding engine, and ICMP
+- sim: a small simulator that wires the router to two hosts
+- tap: connects the router to Linux TAP interfaces
+- tests: unit tests for the checksum, route lookup, and ARP
 
-./router ping proves the whole datapath end to end:
+## Building and running
 
-hostA: ping 10.0.1.2 seq=1
-hostA: reply from 10.0.1.2 seq=1  <-- ping success
-Router rx=4 forwarded=2 arp_tx=2 ...
+Build the project and run the tests:
 
+    make
+    make test
 
-## Run it for real (Linux, root)
-Give the router two TAP interfaces and route between two namespaces/hosts:
-sh
-sudo ./router tap tap0 10.0.0.1/24 02:00:00:00:00:01 \
-                  tap1 10.0.1.1/24 02:00:00:00:00:02
-# put a host on each subnet with its default route via the matching .1 and ping across
+Run the built-in demonstrations (no special privileges needed):
 
+- ./router route : the routing table and example longest-prefix lookups
+- ./router ping  : a host pings another host across the router
+- ./router ttl   : a packet with an expired TTL returns an ICMP error
+
+## Running with real traffic (Linux)
+
+Give the router two TAP interfaces and route between two subnets:
+
+    sudo ./router tap tap0 10.0.0.1/24 02:00:00:00:00:01 \
+                       tap1 10.0.1.1/24 02:00:00:00:00:02
+
+Place a host on each subnet with its default route set to the matching address,
+then ping across the router.
 
 ## Concepts demonstrated
-IPv4 header parsing & checksum TTL decrement & ICMP Time Exceeded 
-longest-prefix match in a trie  connected vs static vs default routes 
-ARP resolution with a pending-packet queue  ICMP echo / destination-unreachable 
-L2 rewrite on forward  TAP I/O.
 
-## Deliberately out of scope
-Dynamic routing protocols (OSPF/BGP), IP fragmentation/reassembly, and IPv6 —
-left out to keep the forwarding core legible. The trie and route table are built
-so a RIP/OSPF process could be layered on top.
+IPv4 header parsing and checksums, TTL handling, longest-prefix-match routing,
+connected and static and default routes, ARP resolution, and ICMP.
+
+## Limitations
+
+To keep the forwarding path readable, this project does not implement dynamic
+routing protocols, IP fragmentation, or IPv6.
